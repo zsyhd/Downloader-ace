@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Vazirmatn", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle galactic starfield layer using pure CSS pinpoint radial gradients */
+.cosmic-starfield {
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.55) 0, transparent 100%),
+    radial-gradient(1.2px 1.2px at 28% 42%, rgba(196, 181, 253, 0.5) 0, transparent 100%),
+    radial-gradient(1px 1px at 45% 12%, rgba(186, 230, 253, 0.5) 0, transparent 100%),
+    radial-gradient(1.5px 1.5px at 67% 26%, rgba(255, 255, 255, 0.45) 0, transparent 100%),
+    radial-gradient(1px 1px at 84% 15%, rgba(196, 181, 253, 0.55) 0, transparent 100%),
+    radial-gradient(1px 1px at 91% 52%, rgba(255, 255, 255, 0.4) 0, transparent 100%),
+    radial-gradient(1.2px 1.2px at 18% 72%, rgba(186, 230, 253, 0.4) 0, transparent 100%),
+    radial-gradient(1px 1px at 58% 68%, rgba(255, 255, 255, 0.35) 0, transparent 100%),
+    radial-gradient(1.4px 1.4px at 76% 82%, rgba(196, 181, 253, 0.45) 0, transparent 100%);
+  background-size: 520px 520px;
+}

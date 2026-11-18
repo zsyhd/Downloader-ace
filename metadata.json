@@ -1,0 +1,6 @@
+{
+  "name": "ACE Music Downloader",
+  "description": "بررسی و دانلود مستقیم فایل‌های صوتی عمومی از لینک اشتراک‌گذاری سایت acemusic.ai",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

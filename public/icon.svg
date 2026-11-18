@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B0D1D" />
+      <stop offset="50%" stop-color="#13103A" />
+      <stop offset="100%" stop-color="#050713" />
+    </linearGradient>
+    <radialGradient id="nebula-glow" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.65" />
+      <stop offset="55%" stop-color="#4F46E5" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#04050B" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="emblem-grad" x1="128" y1="120" x2="384" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#DDD6FE" />
+      <stop offset="50%" stop-color="#A5B4FC" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg-grad)" />
+  <rect width="512" height="512" rx="112" fill="url(#nebula-glow)" />
+  <!-- Subtle stars -->
+  <circle cx="114" cy="128" r="4" fill="#E0E7FF" opacity="0.7" />
+  <circle cx="394" cy="116" r="5" fill="#7DD3FC" opacity="0.8" />
+  <circle cx="408" cy="378" r="3.5" fill="#C4B5FD" opacity="0.65" />
+  <circle cx="104" cy="364" r="3" fill="#E0E7FF" opacity="0.55" />
+  <!-- Music note + download arrow integrated emblem -->
+  <path
+    d="M214 316c-22.1 0-40 16.1-40 36s17.9 36 40 36 40-16.1 40-36V198l108-26v106c-7.5-3.8-16.2-6-25.5-6-22.1 0-40 16.1-40 36s17.9 36 40 36 40-16.1 40-36V142c0-10.2-9.5-17.8-19.4-15.4l-124 30c-7.2 1.7-12.1 8.1-12.1 15.5v149.9c-7.5-3.8-16.2-6-25.5-6z"
+    fill="url(#emblem-grad)"
+  />
+  <!-- Cosmic sparkle -->
+  <path
+    d="M150 156l6 14 14 6-14 6-6 14-6-14-14-6 14-6 6-14z"
+    fill="#F0F9FF"
+    opacity="0.92"
+  />
+</svg>
