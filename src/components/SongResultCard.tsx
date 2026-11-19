@@ -7,12 +7,14 @@ import {
   Download,
   ExternalLink,
   Info,
+  Link2,
   Loader2,
   Music2,
   Pause,
   Play,
   RotateCcw,
   RotateCw,
+  Share2,
   Volume2,
   VolumeX,
 } from 'lucide-react';
@@ -20,6 +22,12 @@ import confetti from 'canvas-confetti';
 import { useEffect, useRef, useState } from 'react';
 import type { SongErrorCode, SongMetadata } from '../shared/types.ts';
 import { formatAudioClock, formatBytes } from '../utils/formatters.ts';
+import {
+  canNavigatorShareFiles,
+  canNavigatorShareUrl,
+  getDirectAudioCopyUrl,
+  getShareErrorKind,
+} from '../utils/share.ts';
 import { AudioWaveformVisualizer } from './AudioWaveformVisualizer.tsx';
 
 interface SongResultCardProps {
@@ -80,13 +88,16 @@ export function SongResultCard({
   const toastTimerRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const cachedAudioBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
   const [coverFailed, setCoverFailed] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedUrlRecently, setCopiedUrlRecently] = useState(false);
+  const [copiedDownloadUrlRecently, setCopiedDownloadUrlRecently] = useState(false);
   const [copiedLyricsRecently, setCopiedLyricsRecently] = useState(false);
+  const [shareState, setShareState] = useState<'idle' | 'preparing' | 'ready-retry'>('idle');
 
   // Audio player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -131,7 +142,10 @@ export function SongResultCard({
     setDownloadedBytes(0);
     setTotalDownloadBytes(song.fileSizeBytes);
     setCopiedUrlRecently(false);
+    setCopiedDownloadUrlRecently(false);
     setCopiedLyricsRecently(false);
+    setShareState('idle');
+    cachedAudioBlobRef.current = null;
   }, [song.normalizedUrl, song.durationSeconds, song.fileSizeBytes]);
 
   useEffect(() => {
@@ -181,10 +195,130 @@ export function SongResultCard({
     const ok = await writeTextToClipboard(song.normalizedUrl);
     if (ok) {
       setCopiedUrlRecently(true);
-      showToast('کپی شد! لینک اشتراک‌گذاری آهنگ در کلیپ‌بورد ذخیره گردید.');
+      showToast('کپی شد! لینک صفحه آهنگ در کلیپ‌بورد ذخیره گردید.');
       window.setTimeout(() => setCopiedUrlRecently(false), 2500);
     } else {
       showToast('مرورگر اجازه دسترسی به کلیپ‌بورد را نداد.');
+    }
+  };
+
+  const handleCopyDownloadUrl = async () => {
+    if (!song.downloadable || typeof window === 'undefined') return;
+    const directUrl = getDirectAudioCopyUrl(
+      song.audioUrl,
+      window.location.origin,
+      song.normalizedUrl
+    );
+    if (!directUrl) return;
+    const ok = await writeTextToClipboard(directUrl);
+    if (ok) {
+      setCopiedDownloadUrlRecently(true);
+      showToast('لینک مستقیم دانلود فایل صوتی در کلیپ‌بورد کپی شد!');
+      window.setTimeout(() => setCopiedDownloadUrlRecently(false), 2500);
+    } else {
+      showToast('مرورگر اجازه دسترسی به کلیپ‌بورد را نداد.');
+    }
+  };
+
+  const handleShareAudioFile = async () => {
+    if (!song.downloadable || !song.audioUrl || shareState === 'preparing') return;
+
+    const directShareUrl =
+      getDirectAudioCopyUrl(
+        song.audioUrl,
+        typeof window !== 'undefined' ? window.location.origin : '',
+        song.normalizedUrl
+      ) || song.normalizedUrl;
+
+    const triggerUrlShareOrSave = async (blob: Blob): Promise<boolean> => {
+      const shareData = {
+        title: song.title,
+        text: `دانلود فایل صوتی ${song.title}`,
+        url: directShareUrl,
+      };
+      if (canNavigatorShareUrl(navigator, shareData)) {
+        try {
+          await navigator.share(shareData);
+          setShareState('idle');
+          showToast('پنجره اشتراک‌گذاری باز شد!');
+          return true;
+        } catch (err) {
+          const kind = getShareErrorKind(err);
+          if (kind === 'abort') {
+            setShareState('idle');
+            return true;
+          }
+          if (kind === 'not-allowed') {
+            setShareState('ready-retry');
+            showToast('فایل آماده شد؛ یک بار دیگر روی «ارسال فایل آماده» بزنید.');
+            return true;
+          }
+        }
+      }
+      triggerBrowserSave(blob, song.downloadFilename);
+      setShareState('idle');
+      showToast(
+        'این مرورگر اشتراک‌گذاری مستقیم را پشتیبانی نمی‌کند؛ فایل ذخیره شد تا به تلگرام بفرستید.'
+      );
+      return false;
+    };
+
+    const triggerShareWithCached = async (blob: Blob, mimeType: string) => {
+      const audioFile = new File([blob], song.downloadFilename, { type: mimeType });
+      if (canNavigatorShareFiles(navigator, audioFile)) {
+        try {
+          await navigator.share({
+            files: [audioFile],
+            title: song.title,
+          });
+          setShareState('idle');
+          showToast('فایل صوتی برای اشتراک‌گذاری ارسال شد!');
+        } catch (err) {
+          const kind = getShareErrorKind(err);
+          if (kind === 'abort') {
+            setShareState('idle');
+            return;
+          }
+          if (kind === 'not-allowed') {
+            setShareState('ready-retry');
+            showToast('فایل آماده شد؛ یک بار دیگر روی «ارسال فایل آماده» بزنید.');
+            return;
+          }
+          await triggerUrlShareOrSave(blob);
+        }
+      } else {
+        await triggerUrlShareOrSave(blob);
+      }
+    };
+
+    if (cachedAudioBlobRef.current) {
+      await triggerShareWithCached(
+        cachedAudioBlobRef.current.blob,
+        cachedAudioBlobRef.current.mimeType
+      );
+      return;
+    }
+
+    setShareState('preparing');
+    try {
+      const response = await fetch(`/api/download?songUrl=${encodeURIComponent(song.normalizedUrl)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP_${response.status}`);
+      }
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('text/html') || contentType.includes('application/json')) {
+        throw new Error('INVALID_CONTENT');
+      }
+      const blob = await response.blob();
+      if (blob.size < 512) {
+        throw new Error('EMPTY_BLOB');
+      }
+      const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
+      cachedAudioBlobRef.current = { blob, mimeType: finalMime };
+      await triggerShareWithCached(blob, finalMime);
+    } catch {
+      setShareState('idle');
+      showToast('دریافت فایل برای اشتراک‌گذاری با خطا مواجه شد.');
     }
   };
 
@@ -293,6 +427,8 @@ export function SongResultCard({
         if (blob.size < 512) {
           throw new Error('EMPTY_BLOB');
         }
+        const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
+        cachedAudioBlobRef.current = { blob, mimeType: finalMime };
         triggerBrowserSave(blob, song.downloadFilename);
         onDownloadSuccess();
         fireCosmicConfetti();
@@ -327,6 +463,7 @@ export function SongResultCard({
 
       const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
       const blob = new Blob(chunks, { type: finalMime });
+      cachedAudioBlobRef.current = { blob, mimeType: finalMime };
       triggerBrowserSave(blob, song.downloadFilename);
       onDownloadSuccess();
       fireCosmicConfetti();
@@ -546,9 +683,9 @@ export function SongResultCard({
             )}
           </div>
 
-          {/* 3. Unified Action Zone: Primary Download + Filename + Secondary Share Actions */}
+          {/* 3. Unified Action Zone: Primary Download + Share File + Utility Copy Links */}
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
                 disabled={!song.downloadable || downloadState === 'downloading'}
@@ -576,36 +713,81 @@ export function SongResultCard({
                 )}
               </button>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleCopyUrl()}
-                  aria-label="کپی لینک اشتراک‌گذاری آهنگ"
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-indigo-300/20 bg-indigo-500/10 px-3.5 py-2 text-xs font-medium text-indigo-100 whitespace-nowrap shrink-0 transition-colors hover:bg-indigo-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
-                >
-                  {copiedUrlRecently ? (
-                    <>
-                      <Check className="h-4 w-4 text-emerald-300" aria-hidden="true" />
-                      <span className="text-emerald-200">کپی شد!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" aria-hidden="true" />
-                      <span>کپی لینک</span>
-                    </>
-                  )}
-                </button>
+              <button
+                type="button"
+                disabled={!song.downloadable || shareState === 'preparing'}
+                onClick={() => void handleShareAudioFile()}
+                aria-label="اشتراک‌گذاری خود فایل آهنگ در تلگرام و پیام‌رسان‌ها"
+                className="inline-flex min-h-[50px] flex-1 sm:flex-initial items-center justify-center gap-2 rounded-xl border border-sky-400/35 bg-sky-500/15 px-5 py-3 text-sm font-semibold text-sky-100 whitespace-nowrap shrink-0 transition-colors hover:bg-sky-500/25 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
+              >
+                {shareState === 'preparing' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <span>آماده‌سازی فایل...</span>
+                  </>
+                ) : shareState === 'ready-retry' ? (
+                  <>
+                    <Share2 className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+                    <span className="text-emerald-200">ارسال فایل آماده</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="h-4 w-4 text-sky-300" aria-hidden="true" />
+                    <span>اشتراک‌گذاری فایل</span>
+                  </>
+                )}
+              </button>
+            </div>
 
-                <a
-                  href={song.normalizedUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-medium text-slate-300 whitespace-nowrap shrink-0 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400"
-                >
-                  <span>مشاهده در سایت</span>
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                </a>
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={!song.downloadable || !song.audioUrl}
+                onClick={() => void handleCopyDownloadUrl()}
+                aria-label="کپی لینک دانلود مستقیم فایل صوتی"
+                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-violet-300/25 bg-violet-500/15 px-3.5 py-2 text-xs font-medium text-violet-100 whitespace-nowrap shrink-0 transition-colors hover:bg-violet-500/25 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+              >
+                {copiedDownloadUrlRecently ? (
+                  <>
+                    <Check className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+                    <span className="text-emerald-200">لینک دانلود کپی شد!</span>
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="h-4 w-4 text-violet-300" aria-hidden="true" />
+                    <span>کپی لینک دانلود</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleCopyUrl()}
+                aria-label="کپی لینک صفحه آهنگ"
+                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-indigo-300/20 bg-indigo-500/10 px-3.5 py-2 text-xs font-medium text-indigo-100 whitespace-nowrap shrink-0 transition-colors hover:bg-indigo-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+              >
+                {copiedUrlRecently ? (
+                  <>
+                    <Check className="h-4 w-4 text-emerald-300" aria-hidden="true" />
+                    <span className="text-emerald-200">کپی شد!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-4 w-4" aria-hidden="true" />
+                    <span>کپی لینک صفحه</span>
+                  </>
+                )}
+              </button>
+
+              <a
+                href={song.normalizedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-medium text-slate-300 whitespace-nowrap shrink-0 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400"
+              >
+                <span>مشاهده در سایت</span>
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              </a>
             </div>
 
             {/* Filename kept directly beside/under the download action it belongs to */}

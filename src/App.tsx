@@ -219,7 +219,7 @@ export default function App() {
             </span>
           </h1>
           <p className="mx-auto max-w-xl text-sm leading-relaxed text-slate-300 sm:text-base">
-            لینک اشتراک‌گذاری آهنگ را وارد کنید تا مشخصات واقعی بررسی شده و فایل صوتی اصلی با کیفیت کامل ذخیره شود.
+            لینک آهنگ رو وارد کن تا بتونی دانلودش کنی
           </p>
         </section>
 
