@@ -21,7 +21,7 @@ export function SongUrlForm({
           htmlFor="song-url-input"
           className="mb-2.5 block text-sm font-medium text-indigo-100/90"
         >
-          لینک آهنگ در acemusic.ai
+          لینک آهنگ
         </label>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">

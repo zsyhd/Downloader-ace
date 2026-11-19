@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { ErrorBanner } from './components/ErrorBanner.tsx';
 import { Header } from './components/Header.tsx';
+import { MeteorShower } from './components/MeteorShower.tsx';
 import { OfflineIndicator } from './components/OfflineIndicator.tsx';
 import { RecentSearches } from './components/RecentSearches.tsx';
 import { SongResultCard } from './components/SongResultCard.tsx';
@@ -45,6 +46,7 @@ export default function App() {
   );
   const [sortOrder, setSortOrder] = useState<HistorySortOrder>('newest');
   const [usageStats, setUsageStats] = useState<UsageStats>(() => loadUsageStats());
+  const resultSectionRef = useRef<HTMLDivElement | null>(null);
 
   const bumpAnalyzedStat = () => {
     setUsageStats((prev) => {
@@ -159,6 +161,26 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (viewState.status !== 'success' && viewState.status !== 'error') return;
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const behavior: ScrollBehavior = prefersReducedMotion ? 'auto' : 'smooth';
+    const timer = window.setTimeout(() => {
+      const actionTarget =
+        viewState.status === 'success'
+          ? document.getElementById('song-download-actions')
+          : null;
+      if (actionTarget) {
+        actionTarget.scrollIntoView({ behavior, block: 'center' });
+      } else {
+        resultSectionRef.current?.scrollIntoView({ behavior, block: 'center' });
+      }
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [viewState]);
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     void runAnalysis(urlInput);
@@ -206,6 +228,7 @@ export default function App() {
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 bottom-0 h-[360px] bg-[radial-gradient(ellipse_60%_50%_at_20%_100%,rgba(79,70,229,0.16),transparent_75%)]"
       />
+      <MeteorShower />
 
       <Header />
 
@@ -246,7 +269,8 @@ export default function App() {
         <StatsBar stats={usageStats} />
 
         {/* Dynamic Status / Result Area */}
-        <AnimatePresence mode="wait">
+        <div ref={resultSectionRef} className="scroll-mt-4">
+          <AnimatePresence mode="wait">
           {viewState.status === 'loading' && (
             <motion.section
               key="loading"
@@ -303,7 +327,8 @@ export default function App() {
               />
             </motion.div>
           )}
-        </AnimatePresence>
+          </AnimatePresence>
+        </div>
       </main>
       <OfflineIndicator />
     </div>

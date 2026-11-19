@@ -10,6 +10,7 @@ import {
   MAX_AUDIO_BYTES,
   MAX_COVER_BYTES,
 } from './server/fetcher.ts';
+import { embedId3v2Tags } from './server/id3.ts';
 import { detectAudioMagicFormat, sanitizeDownloadFilename } from './server/validation.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -153,9 +154,6 @@ async function startServer() {
         'Content-Disposition',
         `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(utf8Filename)}`
       );
-      if (contentLength && Number.isFinite(contentLength)) {
-        res.setHeader('Content-Length', String(contentLength));
-      }
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Audio-Format', magic.format);
       res.setHeader('Cache-Control', 'no-store');
@@ -165,6 +163,109 @@ async function startServer() {
         clientAborted = true;
         reader.cancel().catch(() => {});
       });
+
+      const MAX_TAGGABLE_MP3_BYTES = 50 * 1024 * 1024;
+      const shouldEmbedId3 =
+        magic.format === 'mp3' &&
+        (contentLength === null || contentLength <= MAX_TAGGABLE_MP3_BYTES);
+
+      if (shouldEmbedId3) {
+        const audioChunks: Buffer[] = [Buffer.from(firstRead.value)];
+        let totalRead = firstRead.value.byteLength;
+        let exceededLimit = false;
+
+        while (!clientAborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0) {
+            totalRead += value.byteLength;
+            if (totalRead > MAX_TAGGABLE_MP3_BYTES) {
+              exceededLimit = true;
+              // Flush buffered chunks and stream remaining bytes without ID3 buffering
+              if (contentLength && Number.isFinite(contentLength)) {
+                res.setHeader('Content-Length', String(contentLength));
+              }
+              for (const c of audioChunks) {
+                if (!res.write(c)) {
+                  await new Promise<void>((resolve) => res.once('drain', resolve));
+                }
+              }
+              if (!res.write(Buffer.from(value))) {
+                await new Promise<void>((resolve) => res.once('drain', resolve));
+              }
+              break;
+            }
+            audioChunks.push(Buffer.from(value));
+          }
+        }
+
+        if (exceededLimit) {
+          while (!clientAborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value && value.byteLength > 0) {
+              const canContinue = res.write(Buffer.from(value));
+              if (!canContinue) {
+                await new Promise<void>((resolve) => res.once('drain', resolve));
+              }
+            }
+          }
+          if (!clientAborted) res.end();
+          return;
+        }
+
+        if (clientAborted) return;
+
+        const rawAudioBuffer = Buffer.concat(audioChunks);
+        let coverInput: { bytes: Uint8Array; mimeType: string } | null = null;
+        if (song.coverUrl) {
+          try {
+            const coverRes = await fetchCoverWithFallback(song.coverUrl, song.normalizedUrl, 8000);
+            if (coverRes && coverRes.ok) {
+              const coverCt = (coverRes.headers.get('content-type') || '')
+                .split(';')[0]
+                .trim()
+                .toLowerCase();
+              if (coverCt.startsWith('image/')) {
+                const coverBuf = new Uint8Array(await coverRes.arrayBuffer());
+                if (coverBuf.byteLength > 0 && coverBuf.byteLength <= MAX_COVER_BYTES) {
+                  coverInput = { bytes: coverBuf, mimeType: coverCt };
+                }
+              }
+            }
+          } catch {
+            // Cover embed is best-effort; continue tagging metadata without cover
+          }
+        }
+
+        if (clientAborted) return;
+
+        const lyricsText =
+          song.lyrics.length > 0
+            ? song.lyrics
+                .map((sec) =>
+                  sec.heading ? `[${sec.heading}]\n${sec.lines.join('\n')}` : sec.lines.join('\n')
+                )
+                .join('\n\n')
+            : null;
+
+        const taggedAudio = embedId3v2Tags(rawAudioBuffer, {
+          title: song.title,
+          artist: song.creator,
+          album: 'ACE Music',
+          lyricsText,
+          cover: coverInput,
+        });
+
+        res.setHeader('Content-Length', String(taggedAudio.byteLength));
+        res.setHeader('X-Id3-Tagged', coverInput ? 'full' : 'metadata');
+        res.end(Buffer.from(taggedAudio));
+        return;
+      }
+
+      if (contentLength && Number.isFinite(contentLength)) {
+        res.setHeader('Content-Length', String(contentLength));
+      }
 
       res.write(Buffer.from(firstRead.value));
 
@@ -272,17 +373,15 @@ async function startServer() {
     }
 
     try {
-      const { response } = await fetchWithSafeRedirects(analysis.song.coverUrl, {
-        headers: {
-          Referer: analysis.song.normalizedUrl,
-          Accept: 'image/*,*/*;q=0.8',
-        },
-        timeoutMs: 15000,
-      });
+      const response = await fetchCoverWithFallback(
+        analysis.song.coverUrl,
+        analysis.song.normalizedUrl,
+        15000
+      );
 
-      if (!response.ok) return res.status(404).end();
+      if (!response || !response.ok) return res.status(404).end();
 
-      const ct = (response.headers.get('content-type') || '').toLowerCase();
+      const ct = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (!ct.startsWith('image/')) return res.status(415).end();
 
       const contentLength = Number(response.headers.get('content-length') || '0');
@@ -293,6 +392,27 @@ async function startServer() {
 
       res.setHeader('Content-Type', ct);
       res.setHeader('Cache-Control', 'public, max-age=300');
+
+      if (req.query.download === '1') {
+        const extMap: Record<string, string> = {
+          'image/jpeg': 'jpg',
+          'image/jpg': 'jpg',
+          'image/png': 'png',
+          'image/webp': 'webp',
+          'image/gif': 'gif',
+        };
+        const ext = extMap[ct] || 'jpg';
+        const { utf8Filename, asciiFallback } = sanitizeDownloadFilename(
+          `${analysis.song.title}-cover`,
+          analysis.song.songId,
+          ext
+        );
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(utf8Filename)}`
+        );
+      }
+
       return res.send(buf);
     } catch {
       return res.status(502).end();
@@ -321,6 +441,31 @@ async function startServer() {
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`ACE Music Downloader running on http://0.0.0.0:${PORT}`);
   });
+}
+
+async function fetchCoverWithFallback(
+  coverUrl: string,
+  refererUrl: string,
+  timeoutMs: number
+): Promise<Response | null> {
+  const headers = {
+    Referer: refererUrl,
+    Accept: 'image/jpeg,image/png,image/webp,image/*;q=0.8',
+  };
+  const { response } = await fetchWithSafeRedirects(coverUrl, { headers, timeoutMs });
+  if (response.ok) return response;
+
+  try {
+    const parsed = new URL(coverUrl);
+    if (parsed.search) {
+      const cleanUrl = `${parsed.origin}${parsed.pathname}`;
+      const retried = await fetchWithSafeRedirects(cleanUrl, { headers, timeoutMs });
+      if (retried.response.ok) return retried.response;
+    }
+  } catch {
+    // Ignore malformed URL fallback
+  }
+  return response;
 }
 
 startServer().catch((err) => {

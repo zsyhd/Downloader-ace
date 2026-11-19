@@ -1,11 +1,17 @@
 import {
+  Calendar,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Clock,
   Copy,
+  Cpu,
   Download,
-  ExternalLink,
+  FileAudio,
+  FileDown,
+  HardDrive,
+  ImageDown,
   Info,
   Link2,
   Loader2,
@@ -14,20 +20,17 @@ import {
   Play,
   RotateCcw,
   RotateCw,
-  Share2,
+  Sparkles,
+  UserRound,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { SongErrorCode, SongMetadata } from '../shared/types.ts';
 import { formatAudioClock, formatBytes } from '../utils/formatters.ts';
-import {
-  canNavigatorShareFiles,
-  canNavigatorShareUrl,
-  getDirectAudioCopyUrl,
-  getShareErrorKind,
-} from '../utils/share.ts';
+import { formatLyricsText, parseStyleTags } from '../utils/player.ts';
+import { getDirectAudioCopyUrl } from '../utils/share.ts';
 import { AudioWaveformVisualizer } from './AudioWaveformVisualizer.tsx';
 
 interface SongResultCardProps {
@@ -88,16 +91,15 @@ export function SongResultCard({
   const toastTimerRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const cachedAudioBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
   const [coverFailed, setCoverFailed] = useState(false);
+  const [coverDownloading, setCoverDownloading] = useState(false);
+  const [styleOpen, setStyleOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [copiedUrlRecently, setCopiedUrlRecently] = useState(false);
   const [copiedDownloadUrlRecently, setCopiedDownloadUrlRecently] = useState(false);
   const [copiedLyricsRecently, setCopiedLyricsRecently] = useState(false);
-  const [shareState, setShareState] = useState<'idle' | 'preparing' | 'ready-retry'>('idle');
 
   // Audio player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -117,6 +119,9 @@ export function SongResultCard({
   const coverProxyUrl = song.coverUrl
     ? `/api/cover?songUrl=${encodeURIComponent(song.normalizedUrl)}`
     : null;
+  const coverDownloadUrl = song.coverUrl
+    ? `/api/cover?songUrl=${encodeURIComponent(song.normalizedUrl)}&download=1`
+    : null;
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -131,6 +136,8 @@ export function SongResultCard({
 
   useEffect(() => {
     setCoverFailed(false);
+    setCoverDownloading(false);
+    setStyleOpen(false);
     setLyricsOpen(false);
     setIsPlaying(false);
     setCurrentTime(0);
@@ -141,11 +148,8 @@ export function SongResultCard({
     setDownloadProgress(null);
     setDownloadedBytes(0);
     setTotalDownloadBytes(song.fileSizeBytes);
-    setCopiedUrlRecently(false);
     setCopiedDownloadUrlRecently(false);
     setCopiedLyricsRecently(false);
-    setShareState('idle');
-    cachedAudioBlobRef.current = null;
   }, [song.normalizedUrl, song.durationSeconds, song.fileSizeBytes]);
 
   useEffect(() => {
@@ -191,17 +195,6 @@ export function SongResultCard({
     }
   };
 
-  const handleCopyUrl = async () => {
-    const ok = await writeTextToClipboard(song.normalizedUrl);
-    if (ok) {
-      setCopiedUrlRecently(true);
-      showToast('کپی شد! لینک صفحه آهنگ در کلیپ‌بورد ذخیره گردید.');
-      window.setTimeout(() => setCopiedUrlRecently(false), 2500);
-    } else {
-      showToast('مرورگر اجازه دسترسی به کلیپ‌بورد را نداد.');
-    }
-  };
-
   const handleCopyDownloadUrl = async () => {
     if (!song.downloadable || typeof window === 'undefined') return;
     const directUrl = getDirectAudioCopyUrl(
@@ -213,125 +206,64 @@ export function SongResultCard({
     const ok = await writeTextToClipboard(directUrl);
     if (ok) {
       setCopiedDownloadUrlRecently(true);
-      showToast('لینک مستقیم دانلود فایل صوتی در کلیپ‌بورد کپی شد!');
+      showToast('لینک مستقیم دانلود در کلیپ‌بورد کپی شد!');
       window.setTimeout(() => setCopiedDownloadUrlRecently(false), 2500);
     } else {
       showToast('مرورگر اجازه دسترسی به کلیپ‌بورد را نداد.');
     }
   };
 
-  const handleShareAudioFile = async () => {
-    if (!song.downloadable || !song.audioUrl || shareState === 'preparing') return;
-
-    const directShareUrl =
-      getDirectAudioCopyUrl(
-        song.audioUrl,
-        typeof window !== 'undefined' ? window.location.origin : '',
-        song.normalizedUrl
-      ) || song.normalizedUrl;
-
-    const triggerUrlShareOrSave = async (blob: Blob): Promise<boolean> => {
-      const shareData = {
-        title: song.title,
-        text: `دانلود فایل صوتی ${song.title}`,
-        url: directShareUrl,
-      };
-      if (canNavigatorShareUrl(navigator, shareData)) {
-        try {
-          await navigator.share(shareData);
-          setShareState('idle');
-          showToast('پنجره اشتراک‌گذاری باز شد!');
-          return true;
-        } catch (err) {
-          const kind = getShareErrorKind(err);
-          if (kind === 'abort') {
-            setShareState('idle');
-            return true;
-          }
-          if (kind === 'not-allowed') {
-            setShareState('ready-retry');
-            showToast('فایل آماده شد؛ یک بار دیگر روی «ارسال فایل آماده» بزنید.');
-            return true;
-          }
-        }
-      }
-      triggerBrowserSave(blob, song.downloadFilename);
-      setShareState('idle');
-      showToast(
-        'این مرورگر اشتراک‌گذاری مستقیم را پشتیبانی نمی‌کند؛ فایل ذخیره شد تا به تلگرام بفرستید.'
-      );
-      return false;
-    };
-
-    const triggerShareWithCached = async (blob: Blob, mimeType: string) => {
-      const audioFile = new File([blob], song.downloadFilename, { type: mimeType });
-      if (canNavigatorShareFiles(navigator, audioFile)) {
-        try {
-          await navigator.share({
-            files: [audioFile],
-            title: song.title,
-          });
-          setShareState('idle');
-          showToast('فایل صوتی برای اشتراک‌گذاری ارسال شد!');
-        } catch (err) {
-          const kind = getShareErrorKind(err);
-          if (kind === 'abort') {
-            setShareState('idle');
-            return;
-          }
-          if (kind === 'not-allowed') {
-            setShareState('ready-retry');
-            showToast('فایل آماده شد؛ یک بار دیگر روی «ارسال فایل آماده» بزنید.');
-            return;
-          }
-          await triggerUrlShareOrSave(blob);
-        }
-      } else {
-        await triggerUrlShareOrSave(blob);
-      }
-    };
-
-    if (cachedAudioBlobRef.current) {
-      await triggerShareWithCached(
-        cachedAudioBlobRef.current.blob,
-        cachedAudioBlobRef.current.mimeType
-      );
-      return;
-    }
-
-    setShareState('preparing');
-    try {
-      const response = await fetch(`/api/download?songUrl=${encodeURIComponent(song.normalizedUrl)}`);
-      if (!response.ok) {
-        throw new Error(`HTTP_${response.status}`);
-      }
-      const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      if (contentType.includes('text/html') || contentType.includes('application/json')) {
-        throw new Error('INVALID_CONTENT');
-      }
-      const blob = await response.blob();
-      if (blob.size < 512) {
-        throw new Error('EMPTY_BLOB');
-      }
-      const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
-      cachedAudioBlobRef.current = { blob, mimeType: finalMime };
-      await triggerShareWithCached(blob, finalMime);
-    } catch {
-      setShareState('idle');
-      showToast('دریافت فایل برای اشتراک‌گذاری با خطا مواجه شد.');
-    }
-  };
-
   const handleCopyLyrics = async () => {
     if (song.lyrics.length === 0) return;
-    const text = song.lyrics
-      .map((sec) => (sec.heading ? `[${sec.heading}]\n${sec.lines.join('\n')}` : sec.lines.join('\n')))
-      .join('\n\n');
+    const text = formatLyricsText(song.title, song.creator, song.lyrics);
+    if (!text) return;
     const ok = await writeTextToClipboard(text);
     if (ok) {
       setCopiedLyricsRecently(true);
       showToast('متن آهنگ در کلیپ‌بورد کپی شد!');
       window.setTimeout(() => setCopiedLyricsRecently(false), 2500);
+    } else {
+      showToast('مرورگر اجازه دسترسی به کلیپ‌بورد را نداد.');
+    }
+  };
+
+  const handleDownloadLyrics = () => {
+    if (song.lyrics.length === 0) return;
+    const text = formatLyricsText(song.title, song.creator, song.lyrics);
+    if (!text) return;
+    const safeTitle =
+      song.title
+        .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80) || song.songId;
+    const blob = new Blob([`\uFEFF${text}`], { type: 'text/plain;charset=utf-8' });
+    triggerBrowserSave(blob, `${safeTitle}-lyrics.txt`);
+    showToast('فایل متن آهنگ (.txt) ذخیره شد!');
+  };
+
+  const handleDownloadCover = async () => {
+    if (!coverDownloadUrl || coverDownloading) return;
+    setCoverDownloading(true);
+    try {
+      const response = await fetch(coverDownloadUrl);
+      if (!response.ok) throw new Error('COVER_FETCH_FAILED');
+      const ct = (response.headers.get('content-type') || '').toLowerCase();
+      const blob = await response.blob();
+      if (blob.size < 64) throw new Error('EMPTY_COVER');
+      const ext = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+      const safeTitle =
+        song.title
+          .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 80) || song.songId;
+      triggerBrowserSave(blob, `${safeTitle}-cover.${ext}`);
+      showToast('تصویر کاور با کیفیت اصلی ذخیره شد!');
+    } catch {
+      showToast('دریافت فایل تصویر کاور ناموفق بود.');
+    } finally {
+      setCoverDownloading(false);
     }
   };
 
@@ -427,8 +359,6 @@ export function SongResultCard({
         if (blob.size < 512) {
           throw new Error('EMPTY_BLOB');
         }
-        const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
-        cachedAudioBlobRef.current = { blob, mimeType: finalMime };
         triggerBrowserSave(blob, song.downloadFilename);
         onDownloadSuccess();
         fireCosmicConfetti();
@@ -463,7 +393,6 @@ export function SongResultCard({
 
       const finalMime = contentType || song.audioMimeType || 'audio/mpeg';
       const blob = new Blob(chunks, { type: finalMime });
-      cachedAudioBlobRef.current = { blob, mimeType: finalMime };
       triggerBrowserSave(blob, song.downloadFilename);
       onDownloadSuccess();
       fireCosmicConfetti();
@@ -488,6 +417,44 @@ export function SongResultCard({
   const progressPct =
     effectiveDuration > 0 ? Math.min(100, Math.max(0, (currentTime / effectiveDuration) * 100)) : 0;
   const remainingSeconds = effectiveDuration > 0 ? Math.max(0, effectiveDuration - currentTime) : 0;
+  const styleTagsList = parseStyleTags(song.styleTags);
+  const displayDuration =
+    song.durationText || (effectiveDuration > 0 ? formatAudioClock(effectiveDuration) : null);
+
+  const specItems = [
+    {
+      id: 'model',
+      label: 'مدل ساخت',
+      value: song.modelName,
+      icon: Cpu,
+      iconClass: 'text-violet-300',
+    },
+    displayDuration
+      ? {
+          id: 'duration',
+          label: 'مدت زمان',
+          value: displayDuration,
+          icon: Clock,
+          iconClass: 'text-sky-300',
+        }
+      : null,
+    {
+      id: 'format',
+      label: 'فرمت صدا',
+      value: formatUpper,
+      icon: FileAudio,
+      iconClass: 'text-indigo-300',
+    },
+    song.fileSizeBytes
+      ? {
+          id: 'size',
+          label: 'حجم فایل',
+          value: formatBytes(song.fileSizeBytes),
+          icon: HardDrive,
+          iconClass: 'text-emerald-300',
+        }
+      : null,
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   return (
     <article
@@ -507,8 +474,8 @@ export function SongResultCard({
       )}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-[220px_1fr] md:items-start">
-        {/* Cover Art with guaranteed fallback */}
-        <div className="mx-auto w-full max-w-[220px] md:mx-0">
+        {/* Cover Art with guaranteed fallback + Cover Download & Copy */}
+        <div className="mx-auto w-full max-w-[220px] space-y-2.5 md:mx-0">
           <div className="relative aspect-square w-full overflow-hidden rounded-xl border border-indigo-300/20 bg-[#050610]">
             {coverProxyUrl && !coverFailed ? (
               <img
@@ -525,36 +492,130 @@ export function SongResultCard({
               </div>
             )}
           </div>
+
+          {coverProxyUrl && !coverFailed && (
+            <button
+              type="button"
+              disabled={coverDownloading}
+              onClick={() => void handleDownloadCover()}
+              aria-label="دانلود تصویر کاور با کیفیت اصلی"
+              className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-indigo-300/20 bg-indigo-500/10 px-3.5 py-2 text-xs sm:text-sm font-medium text-indigo-100 whitespace-nowrap transition-colors hover:bg-indigo-500/20 hover:text-white disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+            >
+              {coverDownloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <ImageDown className="h-4 w-4 text-sky-300" aria-hidden="true" />
+              )}
+              <span>دانلود کاور</span>
+            </button>
+          )}
         </div>
 
         {/* Metadata + Player + Grouped Actions */}
         <div className="flex min-w-0 flex-col gap-5">
-          {/* 1. Primary Identity: Title, Creator, Spec Line, Style */}
-          <div className="space-y-2">
+          {/* 1. Primary Identity: Title, Creator, Published Date, Style Tags */}
+          <div className="space-y-2.5">
             <h2 className="text-xl sm:text-2xl font-bold leading-snug text-white">
               {song.title}
             </h2>
 
-            {song.creator && (
-              <p className="text-sm font-medium text-indigo-100/90">
-                سازنده: <span dir="auto">{song.creator}</span>
-              </p>
+            {(song.creator || song.publishedDate) && (
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs sm:text-sm text-slate-300">
+                {song.creator && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <UserRound className="h-3.5 w-3.5 shrink-0 text-violet-300" aria-hidden="true" />
+                    <span className="text-slate-400">سازنده:</span>
+                    <span dir="auto" className="font-medium text-indigo-100">
+                      {song.creator}
+                    </span>
+                  </span>
+                )}
+                {song.publishedDate && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden="true" />
+                    <span className="text-slate-400">انتشار:</span>
+                    <span dir="ltr" className="font-medium text-slate-200 tabular-nums">
+                      {song.publishedDate}
+                    </span>
+                  </span>
+                )}
+              </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs sm:text-sm text-slate-400 tabular-nums">
-              <span dir="ltr" className="font-medium text-indigo-200">
-                {song.modelName}
-              </span>
-              {song.durationText && <span>مدت: {song.durationText}</span>}
-              <span dir="ltr">فرمت: {formatUpper}</span>
-              {song.fileSizeBytes && <span dir="ltr">{formatBytes(song.fileSizeBytes)}</span>}
-            </div>
+            {styleTagsList.length > 0 && (
+              <div aria-label="سبک و حال‌وهوای آهنگ" className="space-y-2">
+                <button
+                  type="button"
+                  aria-expanded={styleOpen}
+                  aria-controls="song-style-tags-panel"
+                  onClick={() => setStyleOpen((prev) => !prev)}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-2 py-1 -mr-2 text-xs sm:text-[13px] font-medium text-slate-300 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                >
+                  <Sparkles className="h-3.5 w-3.5 shrink-0 text-indigo-300/80" aria-hidden="true" />
+                  <span className="text-slate-400">سبک آهنگ</span>
+                  <span className="text-slate-500">({styleTagsList.length})</span>
+                  {styleOpen ? (
+                    <ChevronUp className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  )}
+                </button>
 
-            {song.styleTags && (
-              <p className="text-xs leading-relaxed text-slate-400 text-start">
-                <span dir="auto">{song.styleTags}</span>
-              </p>
+                {styleOpen && (
+                  <div
+                    id="song-style-tags-panel"
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-indigo-300/12 bg-[#050610]/75 px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed text-slate-300"
+                  >
+                    {styleTagsList.map((tag, index) => (
+                      <Fragment key={tag}>
+                        {index > 0 && (
+                          <span aria-hidden="true" className="select-none text-slate-600">
+                            ·
+                          </span>
+                        )}
+                        <span dir="auto" className="text-slate-200/90">
+                          {tag}
+                        </span>
+                      </Fragment>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+          </div>
+
+          {/* 2. Structured Technical Specifications Bento Grid */}
+          <div
+            aria-label="مشخصات فنی فایل صوتی"
+            className={`grid grid-cols-2 gap-2.5 ${
+              specItems.length >= 4
+                ? 'sm:grid-cols-[1.65fr_1fr_1fr_1fr]'
+                : specItems.length === 3
+                  ? 'sm:grid-cols-3'
+                  : 'sm:grid-cols-2'
+            }`}
+          >
+            {specItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div
+                  key={item.id}
+                  className="flex flex-col gap-1 rounded-xl border border-indigo-300/15 bg-[#070918]/85 px-3 py-2.5"
+                >
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                    <Icon className={`h-3.5 w-3.5 shrink-0 ${item.iconClass}`} aria-hidden="true" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  <span
+                    dir="ltr"
+                    title={item.value}
+                    className="max-w-full truncate self-start text-xs sm:text-sm font-semibold text-slate-100 tabular-nums"
+                  >
+                    {item.value}
+                  </span>
+                </div>
+              );
+            })}
           </div>
 
           {/* Non-MP3 format notification */}
@@ -571,8 +632,8 @@ export function SongResultCard({
             </div>
           )}
 
-          {/* 2. HTML5 Audio Preview Player */}
-          <div className="border-t border-indigo-200/10 pt-4">
+          {/* 3. HTML5 Audio Preview Player */}
+          <div>
             <audio
               ref={audioRef}
               preload="metadata"
@@ -598,82 +659,80 @@ export function SongResultCard({
 
             <div
               dir="ltr"
-              className="flex flex-col gap-3 rounded-xl border border-indigo-300/15 bg-[#050610]/90 p-3.5 sm:p-4"
+              className="flex items-center gap-3 rounded-xl border border-indigo-300/15 bg-[#050610]/90 p-3.5 sm:p-4"
             >
-              <div className="flex items-center gap-2.5 sm:gap-3">
-                <button
-                  type="button"
-                  onClick={togglePlayback}
-                  aria-label={isPlaying ? 'توقف پخش' : 'پخش پیش‌نمایش آهنگ'}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-slate-950 transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
-                >
-                  {isPlaying ? (
-                    <Pause className="h-5 w-5 fill-current" aria-hidden="true" />
-                  ) : (
-                    <Play className="h-5 w-5 fill-current translate-x-0.5" aria-hidden="true" />
-                  )}
-                </button>
+              <button
+                type="button"
+                onClick={togglePlayback}
+                aria-label={isPlaying ? 'توقف پخش' : 'پخش پیش‌نمایش آهنگ'}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-slate-950 transition-transform hover:scale-105 active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
+              >
+                {isPlaying ? (
+                  <Pause className="h-5 w-5 fill-current" aria-hidden="true" />
+                ) : (
+                  <Play className="h-5 w-5 fill-current translate-x-0.5" aria-hidden="true" />
+                )}
+              </button>
 
-                {effectiveDuration > 0 && (
-                  <div className="hidden sm:flex items-center gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleSkipBy(-10)}
-                      aria-label="عقب بردن ۱۰ ثانیه"
-                      className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
-                    >
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSkipBy(10)}
-                      aria-label="جلو بردن ۱۰ ثانیه"
-                      className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
-                    >
-                      <RotateCw className="h-4 w-4" aria-hidden="true" />
-                    </button>
+              {effectiveDuration > 0 && (
+                <div className="hidden sm:flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleSkipBy(-10)}
+                    aria-label="عقب بردن ۱۰ ثانیه"
+                    className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                  >
+                    <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSkipBy(10)}
+                    aria-label="جلو بردن ۱۰ ثانیه"
+                    className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                  >
+                    <RotateCw className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-1 flex-col gap-1.5 min-w-0">
+                <AudioWaveformVisualizer
+                  analyser={analyserNode}
+                  isPlaying={isPlaying}
+                  currentTime={currentTime}
+                  duration={effectiveDuration}
+                  bufferedEnd={bufferedEnd}
+                  onSeek={handleSeek}
+                />
+
+                {effectiveDuration > 0 ? (
+                  <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 tabular-nums">
+                    <span className="text-slate-200">{formatAudioClock(currentTime)}</span>
+                    <span className="text-indigo-200/60">
+                      {Math.round(progressPct)}% · -{formatAudioClock(remainingSeconds)}
+                    </span>
+                    <span>{formatAudioClock(effectiveDuration)}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 tabular-nums">
+                    <span>{formatAudioClock(currentTime)}</span>
+                    <span>{song.durationText || 'پیش‌نمایش صوتی'}</span>
                   </div>
                 )}
-
-                <div className="flex flex-1 flex-col gap-1.5 min-w-0">
-                  <AudioWaveformVisualizer
-                    analyser={analyserNode}
-                    isPlaying={isPlaying}
-                    currentTime={currentTime}
-                    duration={effectiveDuration}
-                    bufferedEnd={bufferedEnd}
-                    onSeek={handleSeek}
-                  />
-
-                  {effectiveDuration > 0 ? (
-                    <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 tabular-nums">
-                      <span className="text-slate-200">{formatAudioClock(currentTime)}</span>
-                      <span className="text-indigo-200/60">
-                        {Math.round(progressPct)}% · -{formatAudioClock(remainingSeconds)}
-                      </span>
-                      <span>{formatAudioClock(effectiveDuration)}</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between font-mono text-[11px] text-slate-400 tabular-nums">
-                      <span>{formatAudioClock(currentTime)}</span>
-                      <span>{song.durationText || 'پیش‌نمایش صوتی'}</span>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={toggleMute}
-                  aria-label={isMuted ? 'وصل صدا' : 'قطع صدا'}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
-                >
-                  {isMuted ? (
-                    <VolumeX className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <Volume2 className="h-4 w-4" aria-hidden="true" />
-                  )}
-                </button>
               </div>
+
+              <button
+                type="button"
+                onClick={toggleMute}
+                aria-label={isMuted ? 'وصل صدا' : 'قطع صدا'}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+              >
+                {isMuted ? (
+                  <VolumeX className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Volume2 className="h-4 w-4" aria-hidden="true" />
+                )}
+              </button>
             </div>
 
             {audioError && (
@@ -683,14 +742,14 @@ export function SongResultCard({
             )}
           </div>
 
-          {/* 3. Unified Action Zone: Primary Download + Share File + Utility Copy Links */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2.5">
+          {/* 4. Focused Action Zone: Primary Download + Copy Direct Download Link */}
+          <div id="song-download-actions" className="space-y-2.5 scroll-my-6">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               <button
                 type="button"
                 disabled={!song.downloadable || downloadState === 'downloading'}
                 onClick={handleDownload}
-                className="inline-flex min-h-[50px] flex-1 sm:flex-initial items-center justify-center gap-2.5 rounded-xl bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 px-6 py-3 text-base font-semibold text-white whitespace-nowrap shrink-0 shadow-[0_8px_28px_-6px_rgba(99,102,241,0.6)] transition-all hover:from-violet-500 hover:via-indigo-500 hover:to-sky-500 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
+                className="inline-flex min-h-[50px] w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-l from-violet-600 via-indigo-600 to-sky-600 px-6 py-3 text-base font-semibold text-white whitespace-nowrap shadow-[0_8px_28px_-6px_rgba(99,102,241,0.6)] transition-all hover:from-violet-500 hover:via-indigo-500 hover:to-sky-500 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
               >
                 {downloadState === 'downloading' ? (
                   <>
@@ -715,37 +774,10 @@ export function SongResultCard({
 
               <button
                 type="button"
-                disabled={!song.downloadable || shareState === 'preparing'}
-                onClick={() => void handleShareAudioFile()}
-                aria-label="اشتراک‌گذاری خود فایل آهنگ در تلگرام و پیام‌رسان‌ها"
-                className="inline-flex min-h-[50px] flex-1 sm:flex-initial items-center justify-center gap-2 rounded-xl border border-sky-400/35 bg-sky-500/15 px-5 py-3 text-sm font-semibold text-sky-100 whitespace-nowrap shrink-0 transition-colors hover:bg-sky-500/25 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
-              >
-                {shareState === 'preparing' ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    <span>آماده‌سازی فایل...</span>
-                  </>
-                ) : shareState === 'ready-retry' ? (
-                  <>
-                    <Share2 className="h-4 w-4 text-emerald-300" aria-hidden="true" />
-                    <span className="text-emerald-200">ارسال فایل آماده</span>
-                  </>
-                ) : (
-                  <>
-                    <Share2 className="h-4 w-4 text-sky-300" aria-hidden="true" />
-                    <span>اشتراک‌گذاری فایل</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
                 disabled={!song.downloadable || !song.audioUrl}
                 onClick={() => void handleCopyDownloadUrl()}
-                aria-label="کپی لینک دانلود مستقیم فایل صوتی"
-                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-violet-300/25 bg-violet-500/15 px-3.5 py-2 text-xs font-medium text-violet-100 whitespace-nowrap shrink-0 transition-colors hover:bg-violet-500/25 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                aria-label="کپی لینک مستقیم دانلود فایل صوتی"
+                className="inline-flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl border border-sky-400/35 bg-sky-500/15 px-5 py-3 text-sm font-semibold text-sky-100 whitespace-nowrap transition-colors hover:bg-sky-500/25 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400 cursor-pointer"
               >
                 {copiedDownloadUrlRecently ? (
                   <>
@@ -754,40 +786,11 @@ export function SongResultCard({
                   </>
                 ) : (
                   <>
-                    <Link2 className="h-4 w-4 text-violet-300" aria-hidden="true" />
+                    <Link2 className="h-4 w-4 text-sky-300" aria-hidden="true" />
                     <span>کپی لینک دانلود</span>
                   </>
                 )}
               </button>
-
-              <button
-                type="button"
-                onClick={() => void handleCopyUrl()}
-                aria-label="کپی لینک صفحه آهنگ"
-                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-indigo-300/20 bg-indigo-500/10 px-3.5 py-2 text-xs font-medium text-indigo-100 whitespace-nowrap shrink-0 transition-colors hover:bg-indigo-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
-              >
-                {copiedUrlRecently ? (
-                  <>
-                    <Check className="h-4 w-4 text-emerald-300" aria-hidden="true" />
-                    <span className="text-emerald-200">کپی شد!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-4 w-4" aria-hidden="true" />
-                    <span>کپی لینک صفحه</span>
-                  </>
-                )}
-              </button>
-
-              <a
-                href={song.normalizedUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-medium text-slate-300 whitespace-nowrap shrink-0 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400"
-              >
-                <span>مشاهده در سایت</span>
-                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-              </a>
             </div>
 
             {/* Filename kept directly beside/under the download action it belongs to */}
@@ -823,29 +826,30 @@ export function SongResultCard({
             </p>
           )}
 
-          {/* Optional Lyrics Toggle */}
+          {/* Optional Lyrics Toggle + Copy & Save (.txt) */}
           {song.lyrics.length > 0 && (
             <div className="border-t border-indigo-200/10 pt-3">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
                   aria-expanded={lyricsOpen}
                   onClick={() => setLyricsOpen((prev) => !prev)}
-                  className="inline-flex min-h-[40px] items-center gap-2 text-sm font-medium text-indigo-100 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 rounded cursor-pointer"
+                  className="inline-flex min-h-[40px] items-center gap-1.5 text-xs sm:text-sm font-medium text-indigo-100 transition-colors hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 rounded cursor-pointer"
                 >
                   <span>متن آهنگ ({song.lyrics.length} بخش)</span>
                   {lyricsOpen ? (
-                    <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                    <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
                   ) : (
-                    <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                    <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
                   )}
                 </button>
 
-                {lyricsOpen && (
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => void handleCopyLyrics()}
-                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-indigo-300/20 bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-100 transition-colors hover:bg-indigo-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                    aria-label="کپی متن آهنگ در کلیپ‌بورد"
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-indigo-300/20 bg-indigo-500/10 px-2.5 sm:px-3 py-1 text-xs font-medium text-indigo-100 whitespace-nowrap transition-colors hover:bg-indigo-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
                   >
                     {copiedLyricsRecently ? (
                       <>
@@ -859,7 +863,17 @@ export function SongResultCard({
                       </>
                     )}
                   </button>
-                )}
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadLyrics}
+                    aria-label="ذخیره فایل متن آهنگ"
+                    className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 sm:px-3 py-1 text-xs font-medium text-slate-200 whitespace-nowrap transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-400 cursor-pointer"
+                  >
+                    <FileDown className="h-3.5 w-3.5 text-sky-300" aria-hidden="true" />
+                    <span>ذخیره .txt</span>
+                  </button>
+                </div>
               </div>
 
               {lyricsOpen && (

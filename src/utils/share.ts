@@ -32,6 +32,22 @@ export function canNavigatorShareFiles(
   }
 }
 
+export function supportsNativeAudioFileShare(
+  nav: { share?: unknown; canShare?: (data?: ShareData) => boolean } | undefined =
+    typeof navigator !== 'undefined' ? navigator : undefined
+): boolean {
+  if (!nav || typeof nav.share !== 'function' || typeof nav.canShare !== 'function') {
+    return false;
+  }
+  if (typeof File !== 'function') return false;
+  try {
+    const probe = new File([new Uint8Array(1)], 'probe.mp3', { type: 'audio/mpeg' });
+    return Boolean(nav.canShare({ files: [probe] }));
+  } catch {
+    return false;
+  }
+}
+
 export function canNavigatorShareUrl(
   nav: { share?: unknown; canShare?: (data?: ShareData) => boolean } | undefined,
   data: { title?: string; text?: string; url?: string }
@@ -47,6 +63,27 @@ export function canNavigatorShareUrl(
     }
   }
   return true;
+}
+
+export function normalizeAudioShareMimeType(
+  contentType: string | null | undefined,
+  audioFormat: string | null | undefined
+): string {
+  const base = (contentType || '').split(';')[0].trim().toLowerCase();
+  if (base === 'audio/mp3' || base === 'audio/x-mpeg') return 'audio/mpeg';
+  if (base.startsWith('audio/')) return base;
+  switch ((audioFormat || '').toLowerCase()) {
+    case 'wav':
+      return 'audio/wav';
+    case 'flac':
+      return 'audio/flac';
+    case 'ogg':
+      return 'audio/ogg';
+    case 'm4a':
+      return 'audio/mp4';
+    default:
+      return 'audio/mpeg';
+  }
 }
 
 export function getShareErrorKind(err: unknown): 'abort' | 'not-allowed' | 'other' {

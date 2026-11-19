@@ -6,6 +6,8 @@ import {
   canNavigatorShareUrl,
   getDirectAudioCopyUrl,
   getShareErrorKind,
+  normalizeAudioShareMimeType,
+  supportsNativeAudioFileShare,
 } from './share.ts';
 
 test('buildDirectDownloadUrl creates encoded /api/download URL preserving sh token', () => {
@@ -38,6 +40,13 @@ test('getDirectAudioCopyUrl prefers direct audio source URL and falls back to /a
   );
 });
 
+test('normalizeAudioShareMimeType strips header params and maps audio/mp3 to audio/mpeg', () => {
+  assert.equal(normalizeAudioShareMimeType('audio/mpeg; charset=binary', 'mp3'), 'audio/mpeg');
+  assert.equal(normalizeAudioShareMimeType('audio/mp3', 'mp3'), 'audio/mpeg');
+  assert.equal(normalizeAudioShareMimeType('application/octet-stream', 'wav'), 'audio/wav');
+  assert.equal(normalizeAudioShareMimeType(null, 'mp3'), 'audio/mpeg');
+});
+
 test('canNavigatorShareFiles checks both share and canShare safely', () => {
   const dummyFile = new File(['abc'], 'song.mp3', { type: 'audio/mpeg' });
   assert.equal(canNavigatorShareFiles(undefined, dummyFile), false);
@@ -61,6 +70,9 @@ test('canNavigatorShareFiles checks both share and canShare safely', () => {
     ),
     false
   );
+  assert.equal(supportsNativeAudioFileShare(undefined), false);
+  assert.equal(supportsNativeAudioFileShare({ share: () => {}, canShare: () => true }), true);
+  assert.equal(supportsNativeAudioFileShare({ share: () => {}, canShare: () => false }), false);
 });
 
 test('canNavigatorShareUrl checks navigator.share and optional canShare cleanly', () => {
